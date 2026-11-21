@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>ประกอบคีย์แคป · Keycap Keyboard</title>
+
+  <!-- ฟอนต์ภาษาไทย Kanit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- บอกเบราว์เซอร์ว่าจะโหลดไลบรารี 3D (three) และฟิสิกส์ (cannon-es) จากไหน -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+      "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- พื้นที่วาดเกม 3D -->
+  <div id="game"></div>
+
+  <!-- แถบด้านบน: เวลา / ความคืบหน้า / ปิดเสียง -->
+  <div id="hud">
+    <div class="pill" id="timer">10:00</div>
+    <div class="pill">
+      <span id="count">0 / 61</span>
+      <div class="bar"><div id="barFill"></div></div>
+    </div>
+    <button class="pill icon-btn" id="muteBtn" aria-label="ปิด/เปิดเสียง">🔊</button>
+  </div>
+
+  <!-- ปุ่มเขย่ากอง -->
+  <button id="shakeBtn">เขย่า ✨</button>
+
+  <!-- ข้อความเด้งกลางจอ -->
+  <div id="toast"></div>
+
+  <!-- หน้าเริ่มเกม -->
+  <div id="startScreen" class="overlay hidden">
+    <div class="card">
+      <div class="deco">
+        <span>ก</span><span>ข</span><span>ค</span><span>ง</span>
+      </div>
+      <h1>ประกอบคีย์แคป</h1>
+      <p class="sub">Keycap Keyboard · เลย์เอาต์ไทยเกษมณี</p>
+      <ul class="howto">
+        <li>ลากคีย์แคปจากกองไปวางให้ตรงช่องบนคีย์บอร์ด</li>
+        <li>ประกอบให้ครบ 61 ปุ่ม ภายใน 10 นาที</li>
+        <li>คีย์แคปคว่ำอยู่? ยกขึ้นมามันจะพลิกเอง หรือกด "เขย่า"</li>
+      </ul>
+      <button class="big-btn" id="startBtn">เริ่มเล่น</button>
+      <p class="best" id="bestText"></p>
+      <p class="rotate-hint">📱 หมุนจอแนวนอนจะเล่นง่ายขึ้น</p>
+    </div>
+  </div>
+
+  <!-- หน้าจบเกม -->
+  <div id="endScreen" class="overlay hidden">
+    <div class="card">
+      <div class="end-emoji" id="endEmoji">🎉</div>
+      <h2 id="endTitle">ประกอบเสร็จแล้ว!</h2>
+      <p id="endText"></p>
+      <button class="big-btn" id="retryBtn">เล่นอีกครั้ง</button>
+    </div>
+  </div>
+
+  <!-- แสดงระหว่างโหลด -->
+  <div id="loading">
+    กำลังโหลด…
+    <small>ถ้าค้างนาน ให้เปิดไฟล์ผ่าน Live Server ใน VS Code</small>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
