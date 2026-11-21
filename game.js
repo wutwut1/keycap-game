@@ -33,6 +33,8 @@ const CONFIG = {
   touchLift: 60,        // บนมือถือ ให้คีย์แคปลอยเหนือนิ้วกี่พิกเซล (นิ้วจะได้ไม่บัง)
   gravity: -24,         // แรงโน้มถ่วง (ติดลบ = ตกลง)
   shakeCooldown: 3,     // ปุ่มเขย่ากดซ้ำได้ทุกกี่วินาที
+  maxZoom: 3.5,         // ซูมเข้าได้มากสุดกี่เท่า
+  edgePanSpeed: 8,      // ความเร็วกล้องเลื่อนตาม เมื่อลากคีย์แคปไปชิดขอบจอ
 };
 
 const COLORS = {
@@ -446,29 +448,156 @@ function updateHold(e) {
   setHover(findSlotUnder(aimPoint, held));
 }
 
-canvas.addEventListener('pointerdown', (e) => {
-  Sound.init();
-  if (state !== 'playing' || held) return;
-  const cap = pickCap(e);
-  if (!cap) return;
+// ---------- ซูม / เลื่อนมุมกล้อง ----------
+// zoom = 1 คือเห็นทั้งโต๊ะ, pan = กล้องเลื่อนไปจากกึ่งกลางเท่าไร
+const view = { zoom: 1, pan: new THREE.Vector3(), baseDist: 30, dir: new THREE.Vector3(0, 1, 1) };
+const pointers = new Map();   // นิ้ว/เมาส์ที่กดอยู่ทั้งหมด { x, y }
+let panPointerId = null;      // นิ้วที่ใช้เลื่อนจอ (แตะพื้นที่ว่าง)
+let pinch = null;             // ข้อมูลตอนใช้ 2 นิ้ว { dist, x, y }
+let heldPointer = null;       // ตำแหน่งล่าสุดของนิ้วที่ถือคีย์แคป
+const viewRay = new THREE.Raycaster();
+const viewPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -PLATE_Y);
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
+const _ndc = new THREE.Vector2();
+
+// วางกล้องตาม zoom และ pan ปัจจุบัน
+function applyView() {
+  const k = 1 - 1 / view.zoom;            // ยิ่งซูมมาก ยิ่งเลื่อนได้ไกล
+  view.pan.x = clamp(view.pan.x, -8.6 * k, 8.6 * k);
+  view.pan.z = clamp(view.pan.z, -7.5 * k, 7.5 * k);
+  const target = _a.copy(cameraTarget).add(view.pan);
+  camera.position.copy(target).addScaledVector(view.dir, view.baseDist / view.zoom);
+  camera.lookAt(target);
+  camera.updateMatrixWorld();
+  cameraBase.copy(camera.position);
+}
+
+// แปลงจุดบนจอ เป็นจุดบนโต๊ะ
+function screenToWorld(x, y, out) {
+  const r = canvas.getBoundingClientRect();
+  _ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
+  viewRay.setFromCamera(_ndc, camera);
+  return viewRay.ray.intersectPlane(viewPlane, out);
+}
+
+// ซูมโดยให้จุด (x, y) บนจออยู่กับที่ (เหมือนซูมรูปในมือถือ)
+function zoomAt(x, y, newZoom) {
+  if (!screenToWorld(x, y, _a)) return;
+  const before = _b.copy(_a);
+  view.zoom = clamp(newZoom, 1, CONFIG.maxZoom);
+  applyView();
+  if (screenToWorld(x, y, _a)) {
+    view.pan.add(before.sub(_a));
+    applyView();
+  }
+}
+
+// เลื่อนจอตามนิ้วที่ลากจาก (x0, y0) ไป (x1, y1)
+function panByScreen(x0, y0, x1, y1) {
+  if (!screenToWorld(x0, y0, _b)) return;
+  const from = _b.clone();
+  if (!screenToWorld(x1, y1, _b)) return;
+  view.pan.add(from.sub(_b));
+  applyView();
+}
+
+// หลังกล้องขยับ ให้คีย์แคปที่ถืออยู่ยังอยู่ใต้นิ้วเหมือนเดิม
+function refreshHold() {
+  if (held && heldPointer) updateHold(heldPointer);
+}
+
+// ซูมนุ่มๆ ด้วยปุ่ม (target = null คือกลับไปดูทั้งโต๊ะ)
+function smoothZoom(target) {
+  const r = canvas.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  const startZoom = view.zoom;
+  const startPan = view.pan.clone();
+  const endZoom = target === null ? 1 : clamp(target, 1, CONFIG.maxZoom);
+  tween(0.3, (p) => {
+    const e = easeOutCubic(p);
+    if (target === null) {
+      view.zoom = startZoom + (1 - startZoom) * e;
+      view.pan.copy(startPan).multiplyScalar(1 - e);
+      applyView();
+    } else {
+      zoomAt(cx, cy, startZoom + (endZoom - startZoom) * e);
+    }
+    refreshHold();
+  });
+}
+
+function measurePinch() {
+  const [a, b] = [...pointers.values()];
+  return { dist: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function startHold(cap, e) {
   held = cap;
   heldPointerId = e.pointerId;
-  canvas.setPointerCapture(e.pointerId);
+  heldPointer = { clientX: e.clientX, clientY: e.clientY, pointerType: e.pointerType };
   cap.body.type = CANNON.Body.KINEMATIC;   // ระหว่างถือ ฟิสิกส์จะไม่ดึงลง แต่ยังชนของอื่นได้
   cap.body.angularVelocity.setZero();
   wakeAll();
   Sound.pick();
-  updateHold(e);
+  updateHold(heldPointer);
   canvas.style.cursor = 'grabbing';
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  Sound.init();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  canvas.setPointerCapture(e.pointerId);
+
+  if (pointers.size === 1) {
+    // นิ้วแรก: ถ้าแตะโดนคีย์แคป = หยิบ, ถ้าแตะที่ว่าง = เลื่อนจอ
+    const cap = state === 'playing' && !held ? pickCap(e) : null;
+    if (cap) startHold(cap, e);
+    else panPointerId = e.pointerId;
+  } else if (pointers.size === 2) {
+    // นิ้วที่สอง: เริ่มถ่าง/หุบเพื่อซูม
+    panPointerId = null;
+    pinch = measurePinch();
+  }
 });
 
 canvas.addEventListener('pointermove', (e) => {
-  if (held && e.pointerId === heldPointerId) {
-    updateHold(e);
-  } else if (!held && e.pointerType === 'mouse') {
-    canvas.style.cursor = state === 'playing' && pickCap(e) ? 'grab' : 'default';
+  const p = pointers.get(e.pointerId);
+  if (!p) {
+    // เมาส์ที่ไม่ได้กด: เปลี่ยนรูปเคอร์เซอร์เมื่อชี้โดนคีย์แคป
+    if (!held && e.pointerType === 'mouse') {
+      canvas.style.cursor = state === 'playing' && pickCap(e) ? 'grab' : 'default';
+    }
+    return;
+  }
+  const prevX = p.x;
+  const prevY = p.y;
+  p.x = e.clientX;
+  p.y = e.clientY;
+
+  if (e.pointerId === heldPointerId) {
+    heldPointer = { clientX: e.clientX, clientY: e.clientY, pointerType: e.pointerType };
+    updateHold(heldPointer);
+  }
+
+  if (pointers.size >= 2 && pinch) {
+    const now = measurePinch();
+    if (pinch.dist > 10) zoomAt(now.x, now.y, view.zoom * (now.dist / pinch.dist));
+    if (!held) panByScreen(pinch.x, pinch.y, now.x, now.y); // ไม่ได้ถือของ: 2 นิ้วเลื่อนจอได้ด้วย
+    pinch = now;
+    refreshHold();
+  } else if (e.pointerId === panPointerId) {
+    panByScreen(prevX, prevY, e.clientX, e.clientY);
   }
 });
+
+// ลูกกลิ้งเมาส์ = ซูม (บนคอม)
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoomAt(e.clientX, e.clientY, view.zoom * Math.exp(-e.deltaY * 0.0015));
+  refreshHold();
+}, { passive: false });
 
 function releaseHeld() {
   if (!held) return;
@@ -476,6 +605,7 @@ function releaseHeld() {
   const h = hover;
   held = null;
   heldPointerId = null;
+  heldPointer = null;
   canvas.style.cursor = 'default';
   setHover(null);
 
@@ -494,7 +624,13 @@ function releaseHeld() {
 }
 
 function onPointerUp(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
   if (e.pointerId === heldPointerId) releaseHeld();
+  if (e.pointerId === panPointerId) panPointerId = null;
+  if (pointers.size < 2) pinch = null;
+  // ยกนิ้วหนึ่งออกจากการซูม นิ้วที่เหลือใช้เลื่อนจอต่อได้
+  if (pointers.size === 1 && !held) panPointerId = [...pointers.keys()][0];
 }
 canvas.addEventListener('pointerup', onPointerUp);
 canvas.addEventListener('pointercancel', onPointerUp);
@@ -506,6 +642,23 @@ const tiltEuler = new THREE.Euler();
 
 function updateHeld(dt) {
   if (!held) return;
+
+  // ถือคีย์แคปไปชิดขอบจอตอนซูมอยู่ → กล้องเลื่อนตามไปทางนั้น
+  if (heldPointer && view.zoom > 1.01) {
+    const r = canvas.getBoundingClientRect();
+    const m = Math.min(r.width, r.height) * 0.12;   // ความกว้างของ "ขอบ"
+    const x = heldPointer.clientX - r.left;
+    const y = heldPointer.clientY - r.top;
+    const ex = x < m ? -(1 - x / m) : x > r.width - m ? 1 - (r.width - x) / m : 0;
+    const ey = y < m ? -(1 - y / m) : y > r.height - m ? 1 - (r.height - y) / m : 0;
+    if (ex || ey) {
+      view.pan.x += clamp(ex, -1, 1) * CONFIG.edgePanSpeed * dt;
+      view.pan.z += clamp(ey, -1, 1) * CONFIG.edgePanSpeed * dt;
+      applyView();
+      updateHold(heldPointer);
+    }
+  }
+
   const b = held.body;
   const k = 14;   // ยิ่งมากยิ่งตามนิ้วไว
   const vx = clamp((holdTarget.x - b.position.x) * k, -30, 30);
@@ -703,8 +856,11 @@ function fitCamera() {
     if (fits()) hi = mid;
     else lo = mid;
   }
-  placeAt(hi);
-  cameraBase.copy(camera.position);
+  // จำระยะที่พอดีจอไว้ แล้ววางกล้องตามซูมปัจจุบัน
+  view.baseDist = hi;
+  view.dir.copy(dir);
+  applyView();
+  refreshHold();
 }
 window.addEventListener('resize', fitCamera);
 
@@ -860,6 +1016,11 @@ ui.muteBtn.addEventListener('click', () => {
   Sound.init();
   ui.muteBtn.textContent = Sound.toggleMute() ? '🔇' : '🔊';
 });
+
+// ปุ่มซูม (กดด้วยอีกมือได้ ระหว่างที่นิ้วหนึ่งถือคีย์แคปอยู่)
+$('#zoomInBtn').addEventListener('click', () => smoothZoom(view.zoom * 1.6));
+$('#zoomOutBtn').addEventListener('click', () => smoothZoom(view.zoom / 1.6));
+$('#zoomResetBtn').addEventListener('click', () => smoothZoom(null));
 
 $('#startBtn').addEventListener('click', startGame);
 $('#retryBtn').addEventListener('click', startGame);
